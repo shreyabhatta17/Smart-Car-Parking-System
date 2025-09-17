@@ -1,0 +1,128 @@
+#include <Arduino.h>
+#include <ESP8266WiFi.h> // ESP8266 WiFi library
+#include <PubSubClient.h> // MQTT library for ESP8266
+
+// Define GPIO pins
+#define trigPin D1  // GPIO 5, D1, pin 5 — for ultrasonic sensor trigger
+#define echoPin D2  // GPIO 4, D2, pin 4 — for ultrasonic sensor echo
+#define pirPin D5   // GPIO 14, D5, pin 14 — for PIR motion sensor input pin
+#define ledPin D6   // GPIO 12, D6, pin 12 — for controlling light bulb relay
+
+// WiFi and MQTT server settings
+const char* ssid = "WiFi-SSID"; // WiFi network SSID
+const char* password = "WiFi-Password"; // WiFi password
+const char* mqttServer = "broker.hivemq.com"; // MQTT broker server
+const int mqttPort = 1883; // MQTT broker port
+const char* mqttTopicUltrasonic = "sensor/ultrasonic"; // MQTT topic for ultrasonic sensor
+const char* mqttTopicPIR = "sensor/pir"; // MQTT topic for PIR motion sensor
+const char* mqttTopicLED = "actuator/led"; // MQTT topic for light bulb
+
+WiFiClient espClient;
+PubSubClient client(espClient);
+
+// Function to connect ESP8266 to WiFi
+void setup_wifi() {
+  delay(10);
+  Serial.println();
+  Serial.print("Connecting to ");
+  Serial.println(ssid);
+
+  WiFi.begin(ssid, password);
+
+  while (WiFi.status() != WL_CONNECTED) {
+    delay(500);
+    Serial.print(".");
+  }
+
+  Serial.println("");
+  Serial.println("WiFi connected");
+  Serial.println("IP address: ");
+  Serial.println(WiFi.localIP()); // Display IP address on Serial Monitor
+}
+
+// Function to handle incoming MQTT messages
+void callback(char* topic, byte* payload, unsigned int length) {
+  Serial.print("Message arrived in topic: ");
+  Serial.println(topic);
+
+  Serial.print("Message: ");
+  for (int i = 0; i < length; i++) {
+    Serial.print((char)payload[i]);
+  }
+  Serial.println();
+
+  // Control the light bulb based on the message
+  if (strcmp(topic, mqttTopicLED) == 0) {
+    if ((char)payload[0] == '1') {
+      digitalWrite(ledPin, HIGH); // Turn on LED
+    } else {
+      digitalWrite(ledPin, LOW); // Turn off LED
+    }
+  }
+}
+
+// Function to reconnect to MQTT broker
+void reconnect() {
+  while (!client.connected()) {
+    Serial.print("Attempting MQTT connection...");
+    if (client.connect("ESP8266Client")) {
+      Serial.println("connected");
+      client.subscribe(mqttTopicLED); // Subscribe to LED topic
+    } else {
+      Serial.print("failed, rc=");
+      Serial.print(client.state());
+      Serial.println(" try again in 5 seconds");
+      delay(5000);
+    }
+  }
+}
+
+// Function to measure distance using ultrasonic sensor
+long measureDistance() {
+  digitalWrite(trigPin, LOW);
+  delayMicroseconds(2);
+  digitalWrite(trigPin, HIGH);
+  delayMicroseconds(10);
+  digitalWrite(trigPin, LOW);
+
+  long duration = pulseIn(echoPin, HIGH);
+  long distance = duration * 0.034 / 2;
+  return distance;
+}
+
+void setup() {
+  Serial.begin(115200);
+
+  pinMode(trigPin, OUTPUT); // Ultrasonic sensor trigger pin
+  pinMode(echoPin, INPUT);  // Ultrasonic sensor echo pin
+  pinMode(pirPin, INPUT);   // PIR motion sensor pin
+  pinMode(ledPin, OUTPUT);  // Light bulb control pin
+
+  setup_wifi();
+  client.setServer(mqttServer, mqttPort);
+  client.setCallback(callback);
+}
+
+void loop() {
+  if (!client.connected()) {
+    reconnect();
+  }
+  client.loop();
+
+  long distance = measureDistance();
+  int motion = digitalRead(pirPin);
+
+  // Publish ultrasonic sensor data
+  char distanceStr[10];
+  dtostrf(distance, 1, 2, distanceStr);
+  client.publish(mqttTopicUltrasonic, distanceStr);
+
+  // Publish PIR motion sensor data
+  if (motion == HIGH) {
+    client.publish(mqttTopicPIR, "1");
+  } else {
+    client.publish(mqttTopicPIR, "0");
+  }
+
+  delay(2000); // Delay between sensor readings
+}
